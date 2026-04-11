@@ -1,4 +1,9 @@
 import requests
+from groq import Groq
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 
 def fetch_anime(query):
@@ -7,19 +12,6 @@ def fetch_anime(query):
     response = requests.get(url, params=params)
     data = response.json()
     return data["data"]
-
-
-# results = fetch_anime("fullmetal alchemist brotherhood") # testing the function to see if it works
-
-# for anime in results:         # testing printing the results to see if it works
-#     print(anime["title"])
-#     print(anime["score"])
-#     print(anime["rank"])
-
-
-# results = fetch_anime("death note")
-
-# print(results[0]["episodes"])
 
 
 def main():
