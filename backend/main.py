@@ -1,12 +1,46 @@
 import requests
 from groq import Groq
 from dotenv import load_dotenv
+from fastapi import FastAPI
+from fastapi import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import os
 import json
 
 load_dotenv()
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+_groq_api_key = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=_groq_api_key) if _groq_api_key else None
+
+
+# This creates the FastAPI app — like Flask's app = Flask(__name__)
+app = FastAPI()
+
+
+# This allows the Next.js frontend to talk to this backend
+# Without this the browser would block the requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# This defines what shape the incoming request data should be
+# When frontend sends {"message": "something like death note"}
+# FastAPI automatically validates and parses it
+class RecommendRequest(BaseModel):
+    message: str
+
+
+class FeedbackRequest(BaseModel):
+    message: str
+    history: list
+
+
+# ── these functions are identical to your CLI version ──
 
 
 def fetch_anime(query):
@@ -27,6 +61,8 @@ def fetch_anime(query):
 
 
 def ask_groq(messages):
+    if client is None:
+        raise RuntimeError("GROQ_API_KEY is not set")
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", messages=messages
     )
@@ -56,6 +92,45 @@ def get_recommendations(user_input):
         return json.loads(response)
     except json.JSONDecodeError:
         return None
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
+@app.post("/recommend")
+def recommend(req: RecommendRequest):
+    try:
+        recs = get_recommendations(req.message)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if not recs:
+        raise HTTPException(status_code=502, detail="Failed to generate recommendations")
+
+    return recs
+
+
+@app.post("/feedback")
+def feedback(req: FeedbackRequest):
+    """
+    Continue the conversation after initial recommendations.
+    The frontend should send a `history` list of Groq-style messages:
+    [{"role":"system"|"user"|"assistant","content":"..."}]
+    """
+    if not isinstance(req.history, list):
+        raise HTTPException(status_code=400, detail="history must be a list")
+
+    messages = list(req.history)
+    messages.append({"role": "user", "content": req.message})
+
+    try:
+        response = ask_groq(messages)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"response": response, "history": messages + [{"role": "assistant", "content": response}]}
 
 
 def print_category(title, anime_names):
@@ -116,4 +191,5 @@ def main():
         messages.append({"role": "assistant", "content": response})
 
 
-main()
+if __name__ == "__main__":
+    main()
