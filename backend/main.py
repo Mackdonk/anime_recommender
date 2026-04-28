@@ -3,6 +3,8 @@ from groq import Groq
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -16,6 +18,10 @@ client = Groq(api_key=_groq_api_key) if _groq_api_key else None
 
 # This creates the FastAPI app — like Flask's app = Flask(__name__)
 app = FastAPI()
+
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 # This allows the Next.js frontend to talk to this backend
@@ -60,6 +66,23 @@ def fetch_anime(query):
     return None
 
 
+def fetch_mal_link(query: str):
+    """
+    Best-effort lookup of the first matching anime on Jikan.
+    Returns a direct MyAnimeList URL like:
+    https://myanimelist.net/anime/1535/Death_Note
+    """
+    url = "https://api.jikan.moe/v4/anime"
+    params = {"q": query, "limit": 1}
+    response = requests.get(url, params=params, timeout=10)
+    data = response.json()
+    results = data.get("data", [])
+    if not results:
+        return None
+    anime = results[0]
+    return anime.get("url")
+
+
 def ask_groq(messages):
     if client is None:
         raise RuntimeError("GROQ_API_KEY is not set")
@@ -99,6 +122,14 @@ def health():
     return {"ok": True}
 
 
+@app.get("/")
+def index():
+    index_path = os.path.join(_static_dir, "index.html")
+    if not os.path.isfile(index_path):
+        raise HTTPException(status_code=404, detail="UI not found (missing backend/static/index.html)")
+    return FileResponse(index_path)
+
+
 @app.post("/recommend")
 def recommend(req: RecommendRequest):
     try:
@@ -109,7 +140,17 @@ def recommend(req: RecommendRequest):
     if not recs:
         raise HTTPException(status_code=502, detail="Failed to generate recommendations")
 
-    return recs
+    def enrich(names):
+        out = []
+        for name in names or []:
+            out.append({"name": name, "mal_url": fetch_mal_link(name)})
+        return out
+
+    return {
+        "most_similar": enrich(recs.get("most_similar")),
+        "by_genre": enrich(recs.get("by_genre")),
+        "hidden_gems": enrich(recs.get("hidden_gems")),
+    }
 
 
 @app.post("/feedback")
