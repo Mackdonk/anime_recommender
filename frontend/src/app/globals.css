@@ -3,6 +3,7 @@
 :root {
   --background: #09090b;
   --foreground: #fafafa;
+  color-scheme: dark;
 }
 
 @theme inline {
@@ -23,4 +24,30 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Dark scrollbars (Firefox + WebKit) — pair with class `scrollbar-dark` on overflow nodes */
+.scrollbar-dark {
+  scrollbar-width: thin;
+  scrollbar-color: #52525b #18181b;
+}
+
+.scrollbar-dark::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-dark::-webkit-scrollbar-track {
+  background: #18181b;
+  border-radius: 8px;
+}
+
+.scrollbar-dark::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 8px;
+  border: 2px solid #18181b;
+}
+
+.scrollbar-dark::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
 }
