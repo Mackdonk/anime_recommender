@@ -24,14 +24,38 @@ if os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
-# This allows the Next.js frontend to talk to this backend
-# Without this the browser would block the requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Browser requests need an explicit origin match. Local dev + optional production
+# URLs from env (comma-separated), e.g. ALLOWED_ORIGINS=https://my-app.vercel.app
+_cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_extra_origins = os.getenv("ALLOWED_ORIGINS", "")
+if _extra_origins.strip():
+    _cors_origins.extend(
+        [o.strip() for o in _extra_origins.split(",") if o.strip()]
+    )
+
+# Emergency bypass if preflight still fails after redeploy (any site can call your API from a browser).
+_cors_allow_all = os.getenv("CORS_ALLOW_ALL", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
 )
+
+if _cors_allow_all:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        # Production + preview: https://<project>.vercel.app
+        allow_origin_regex=r"https://[a-zA-Z0-9][-a-zA-Z0-9]*\.vercel\.app",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # This defines what shape the incoming request data should be
@@ -124,10 +148,20 @@ def health():
 
 @app.get("/")
 def index():
+    """Serve legacy static UI if present; otherwise a small JSON landing page."""
     index_path = os.path.join(_static_dir, "index.html")
-    if not os.path.isfile(index_path):
-        raise HTTPException(status_code=404, detail="UI not found (missing backend/static/index.html)")
-    return FileResponse(index_path)
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return {
+        "service": "anime-recommender-api",
+        "health": "/health",
+        "docs": "/docs",
+        "endpoints": {
+            "recommend": "POST /recommend",
+            "feedback": "POST /feedback",
+        },
+        "note": "The web UI is deployed separately (e.g. Vercel); use POST /recommend from the frontend.",
+    }
 
 
 @app.post("/recommend")
