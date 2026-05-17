@@ -1,0 +1,4 @@
+root = true
+
+[requirements.txt]
+charset = utf-8
