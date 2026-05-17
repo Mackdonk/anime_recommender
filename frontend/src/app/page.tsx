@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Role = "system" | "user" | "assistant";
 type ChatMessage = { role: Role; content: string };
@@ -13,23 +13,41 @@ type Recommendations = {
   hidden_gems: AnimeItem[];
 };
 
+function formatRecommendationsForChat(recs: Recommendations): string {
+  const block = (title: string, items: AnimeItem[] | undefined) =>
+    items?.length
+      ? `${title}:\n${items.map((i) => `• ${i.name}`).join("\n")}`
+      : `${title}: (none)`;
+
+  return [
+    "Here are some picks based on what you asked for:",
+    block("Most similar", recs.most_similar),
+    block("By genre", recs.by_genre),
+    block("Hidden gems", recs.hidden_gems),
+  ].join("\n\n");
+}
+
 function Section({
   title,
   items,
   onPick,
+  className = "",
 }: {
   title: string;
   items: AnimeItem[] | undefined;
   onPick?: (name: string) => void;
+  className?: string;
 }) {
   return (
-    <section className="rounded-2xl border border-purple-900/50 bg-[#120a1f] p-5">
-      <h2 className="text-lg font-semibold text-white">{title}</h2>
+    <section
+      className={`flex min-h-0 flex-col rounded-lg border border-zinc-700/80 bg-zinc-900 p-5 ${className}`}
+    >
+      <h2 className="shrink-0 text-lg font-semibold text-white">{title}</h2>
 
       {!items?.length ? (
-        <p className="mt-3 text-sm text-purple-200/60">No results yet.</p>
+        <p className="mt-3 shrink-0 text-sm text-zinc-500">No results yet.</p>
       ) : (
-        <ul className="mt-4 list-disc space-y-2 pl-5 text-purple-100">
+        <ul className="mt-4 min-h-0 flex-1 list-disc space-y-2 overflow-y-auto pl-5 text-zinc-300">
           {items.map((x) => (
             <li key={x.mal_url ?? x.name}>
               {x.mal_url ? (
@@ -38,7 +56,7 @@ function Section({
                   target="_blank"
                   rel="noreferrer"
                   onClick={() => onPick?.(x.name)}
-                  className="text-left underline decoration-purple-400/40 underline-offset-4 hover:decoration-purple-200"
+                  className="text-left underline decoration-zinc-600 underline-offset-2 hover:text-zinc-100 hover:decoration-zinc-400"
                   title="Open on MyAnimeList (also adds to My Anime)"
                 >
                   {x.name}
@@ -47,7 +65,7 @@ function Section({
                 <button
                   type="button"
                   onClick={() => onPick(x.name)}
-                  className="text-left underline decoration-purple-400/40 underline-offset-4 hover:decoration-purple-200"
+                  className="text-left underline decoration-zinc-600 underline-offset-2 hover:text-zinc-100 hover:decoration-zinc-400"
                   title="Add to My Anime"
                 >
                   {x.name}
@@ -68,26 +86,33 @@ export default function Home() {
     process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") ??
     "http://127.0.0.1:8000";
 
-  const [prompt, setPrompt] = useState("");
   const [recs, setRecs] = useState<Recommendations | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [recommendLoading, setRecommendLoading] = useState(false);
 
-  const [history, setHistory] = useState<ChatMessage[]>([
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
     {
       role: "system",
       content:
-        "You are an expert anime recommender. The user has received recommendations and may want adjustments. Help them find the perfect anime based on their feedback.",
+        "You are an expert anime recommender. The user may ask for different recommendations, tweaks to mood or genre, shorter series, or alternatives to shows they dislike. Be concise and helpful.",
     },
   ]);
-
-  const [feedbackText, setFeedbackText] = useState("");
-  const [feedbackReply, setFeedbackReply] = useState<string | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const [myAnime, setMyAnime] = useState<string[]>([]);
 
-  const canRecommend = prompt.trim().length > 0 && !loading;
-  const canFeedback = feedbackText.trim().length > 0 && !loading;
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const visibleMessages = chatHistory.filter((m) => m.role !== "system");
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [visibleMessages.length, chatLoading, recommendLoading]);
+
+  const busy = recommendLoading || chatLoading;
+  const canSend = chatInput.trim().length > 0 && !busy;
 
   const addToMyAnime = (name: string) => {
     const normalized = name.trim();
@@ -99,20 +124,15 @@ export default function Home() {
     );
   };
 
-  const removeFromMyAnime = (name: string) => {
-    setMyAnime((prev) => prev.filter((x) => x !== name));
-  };
-
-  const recommend = async () => {
-    setLoading(true);
+  const runRecommend = async (message: string) => {
+    setRecommendLoading(true);
     setError(null);
-    setFeedbackReply(null);
 
     try {
       const res = await fetch(`${apiBase}/recommend`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: prompt.trim() }),
+        body: JSON.stringify({ message }),
       });
 
       if (!res.ok) {
@@ -123,29 +143,30 @@ export default function Home() {
       const data = (await res.json()) as Recommendations;
       setRecs(data);
 
-      setHistory((h) => [
+      setChatHistory((h) => [
         ...h,
-        { role: "user", content: prompt.trim() },
-        { role: "assistant", content: JSON.stringify(data) },
+        { role: "user", content: message },
+        { role: "assistant", content: formatRecommendationsForChat(data) },
       ]);
+      setChatInput("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {
-      setLoading(false);
+      setRecommendLoading(false);
     }
   };
 
-  const sendFeedback = async () => {
-    setLoading(true);
-    setError(null);
+  const runFeedback = async (message: string) => {
+    setChatLoading(true);
+    setChatError(null);
 
     try {
       const res = await fetch(`${apiBase}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: feedbackText.trim(),
-          history,
+          message,
+          history: chatHistory,
         }),
       });
 
@@ -159,122 +180,140 @@ export default function Home() {
         history: ChatMessage[];
       };
 
-      setFeedbackReply(data.response);
-      setHistory(data.history);
-      setFeedbackText("");
+      setChatHistory(data.history);
+      setChatInput("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Request failed");
+      setChatError(e instanceof Error ? e.message : "Request failed");
     } finally {
-      setLoading(false);
+      setChatLoading(false);
     }
   };
 
-  const hint = useMemo(() => {
-    if (apiBase.includes("127.0.0.1") || apiBase.includes("localhost")) {
-      return `API: ${apiBase} (local)`;
-    }
+  const submitFromChat = async () => {
+    const text = chatInput.trim();
+    if (!text || busy) return;
 
-    return `API: ${apiBase}`;
-  }, [apiBase]);
+    if (recs === null) {
+      await runRecommend(text);
+    } else {
+      await runFeedback(text);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-[#05000e] text-white">
-      <main className="mx-auto w-full max-w-5xl px-4 py-10">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <main className="mx-auto w-full max-w-[1600px] px-4 py-10">
         <header className="flex flex-col gap-2">
           <h1 className="text-4xl font-black tracking-tight text-white">
             Anime{" "}
-            <span className="text-purple-400">
-              Recommender
-            </span>
+            <span className="text-purple-400">Recommender</span>
           </h1>
-
-          <p className="text-sm text-purple-200/70">{hint}</p>
         </header>
 
-        <section className="mt-8 rounded-2xl border border-purple-800/50 bg-[#120a1f]/90 p-5 shadow-2xl">
-          <label className="text-sm font-medium text-purple-100">
-            What are you looking for?
-          </label>
-
-          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-            <input
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder='e.g. "something like Death Note, dark and smart"'
-              className="h-12 w-full rounded-xl border border-purple-800/70 bg-[#1a102b] px-4 text-white outline-none placeholder:text-purple-300/40 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/30"
-            />
-
-            <button
-              onClick={recommend}
-              disabled={!canRecommend}
-              className="h-12 rounded-xl bg-purple-500 px-6 font-semibold text-white shadow-lg shadow-purple-500/30 transition hover:scale-[1.02] hover:from-purple-500 hover:to-pink-400 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
-            >
-              {loading ? "Working..." : "Recommend"}
-            </button>
-          </div>
-
-          {error ? (
-            <p className="mt-3 rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
-              {error}
-            </p>
-          ) : null}
-        </section>
-
-        <section className="mt-6 grid gap-4 md:grid-cols-3">
-          <Section
-            title="Most Similar"
-            items={recs?.most_similar}
-            onPick={addToMyAnime}
-          />
-          <Section title="By Genre" items={recs?.by_genre} onPick={addToMyAnime} />
-          <Section
-            title="Hidden Gems"
-            items={recs?.hidden_gems}
-            onPick={addToMyAnime}
-          />
-        </section>
-
-        <section className="mt-8 rounded-2xl border border-purple-800/50 bg-[#120a1f] p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-white">
-              Refine with feedback
-            </h2>
-
-            <p className="text-xs text-purple-200/60">
-              Uses{" "}
-              <code className="rounded bg-purple-950/70 px-1.5 py-0.5 text-pink-300">
-                /feedback
-              </code>
-            </p>
-          </div>
-
-          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-            <input
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-              placeholder='e.g. "less gore, more mystery, shorter shows"'
-              className="h-12 w-full rounded-xl border border-purple-800/70 bg-[#1a102b] px-4 text-white outline-none placeholder:text-purple-300/40 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/30"
-            />
-
-            <button
-              onClick={sendFeedback}
-              disabled={!canFeedback}
-              className="h-12 rounded-xl border border-purple-500/40 bg-purple-500/15 px-6 font-semibold text-purple-100 shadow-lg shadow-purple-500/10 transition hover:bg-purple-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loading ? "Working..." : "Send"}
-            </button>
-          </div>
-
-          {feedbackReply ? (
-            <div className="mt-4 rounded-xl border border-purple-800/50 bg-[#1a102b] p-4 text-sm text-purple-100">
-              {feedbackReply}
+        <div className="mt-8 grid gap-6 lg:grid-cols-2 lg:items-stretch">
+          {/* Left: single chat = “what are you looking for” + follow-up */}
+          <section className="flex max-h-[min(560px,70vh)] flex-col rounded-lg border border-zinc-700/80 bg-zinc-900 lg:sticky lg:top-6 lg:max-h-[calc(100vh-8rem)]">
+            <div className="border-b border-zinc-700/80 px-4 py-3">
+              <h2 className="text-lg font-semibold text-white">
+                What are you looking for?
+              </h2>
             </div>
-          ) : (
-            <p className="mt-3 text-sm text-purple-200/60">
-              After you get recommendations, use this to ask for tweaks.
-            </p>
-          )}
-        </section>
+
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-[140px] flex-1 space-y-3 overflow-y-auto p-4">
+                {visibleMessages.length > 0
+                  ? visibleMessages.map((m, i) => (
+                    <div
+                      key={`${i}-${m.role}`}
+                      className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`rounded-lg px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${m.role === "user"
+                          ? "max-w-[85%] bg-purple-600/85 text-white"
+                          : "max-w-full border border-zinc-700 bg-zinc-800/90 text-zinc-200"
+                          }`}
+                      >
+                        {m.content}
+                      </div>
+                    </div>
+                  ))
+                  : null}
+                {busy ? (
+                  <div className="flex justify-start">
+                    <div className="rounded-lg border border-zinc-700 bg-zinc-800/90 px-3 py-2 text-sm text-zinc-400">
+                      {recommendLoading
+                        ? "Finding recommendations…"
+                        : "Thinking…"}
+                    </div>
+                  </div>
+                ) : null}
+                <div ref={messagesEndRef} />
+              </div>
+
+              <div className="border-t border-zinc-700/80 p-3">
+                {error ? (
+                  <p className="mb-2 rounded-md border border-red-900/60 bg-red-950/35 px-3 py-2 text-sm text-red-200/90">
+                    {error}
+                  </p>
+                ) : null}
+                {chatError ? (
+                  <p className="mb-2 rounded-md border border-red-900/60 bg-red-950/35 px-3 py-2 text-sm text-red-200/90">
+                    {chatError}
+                  </p>
+                ) : null}
+                <div className="flex flex-col gap-2">
+                  <textarea
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        if (canSend) void submitFromChat();
+                      }
+                    }}
+                    placeholder='e.g. "something like Death Note—dark and clever"'
+                    rows={3}
+                    className="min-h-[4.5rem] w-full resize-y rounded-md border border-zinc-700 bg-zinc-800/80 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500/40"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void submitFromChat()}
+                    disabled={!canSend}
+                    className="h-12 w-full rounded-xl bg-purple-500 px-6 font-semibold text-white shadow-lg shadow-purple-500/30 transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                  >
+                    {recommendLoading
+                      ? "Working…"
+                      : chatLoading
+                        ? "Sending…"
+                        : "Send"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Right: stacked lists, fills remaining width & viewport height */}
+          <div className="flex min-h-[min(520px,70vh)] flex-col gap-4 lg:min-h-[calc(100vh-10rem)]">
+            <Section
+              title="Most Similar"
+              items={recs?.most_similar}
+              onPick={addToMyAnime}
+              className="flex-1"
+            />
+            <Section
+              title="By Genre"
+              items={recs?.by_genre}
+              onPick={addToMyAnime}
+              className="flex-1"
+            />
+            <Section
+              title="Hidden Gems"
+              items={recs?.hidden_gems}
+              onPick={addToMyAnime}
+              className="flex-1"
+            />
+          </div>
+        </div>
       </main>
     </div>
   );
